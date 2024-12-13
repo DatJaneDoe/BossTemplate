@@ -82,7 +82,7 @@ using UnityEngine.Assertions;
 using Il2CppAssets.Scripts.Unity.Scenes;
 using Il2CppAssets.Scripts.Models.Towers.Filters;
 using Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors;
-using NinjaKiwi.Common.ResourceUtils;
+
 using BTD_Mod_Helper.Api.Components;
 using Il2CppAssets.Scripts.Unity.UI_New.Utils;
 using static MelonLoader.MelonLogger;
@@ -149,12 +149,6 @@ namespace BossHandlerNamespace
             public bool usesExtraInfo = false;
             public string extraInfoIcon = "";
             public string extraInfoText = "";
-
-            // If you want the health bar to display values other than the bosses actual health. This is useful for phasing mechanics
-            // Example: Boss with 1M HP goes into phase 2 at 500K HP, so you can make the health bar say X/500K for phase 1 and phase 2
-            public bool usesHealthOverride = false;
-            public int fakeHealth = 0;
-            public int fakeMaxHealth = 0;
             public BossRegisteration(BloonModel boss, string id, string displayName, bool isMainBoss = true, string icon = "defaultIcon", int continueRounds = 0, string description = "")
             {
                 this.icon = icon;
@@ -214,9 +208,6 @@ namespace BossHandlerNamespace
             public BossPanel() : base() { }
             public ObjectId bloon;
 
-
-            public int healthOverride = -1;
-            public int maxHealthOverride = -1;
 
             public ModHelperImage barImage;
             public ModHelperImage healthBlockBar;
@@ -315,7 +306,7 @@ namespace BossHandlerNamespace
 
 
 
-              
+
                     descriptionBox.Hide();
                
 
@@ -346,20 +337,10 @@ namespace BossHandlerNamespace
 
                             extraTextObject.Text.SetText(extraText);
                         }
-                        int health = 0;
-                        int maxHealth = 0;
-                        if(registeration.usesHealthOverride)
-                        {
-                            health = registeration.fakeHealth;
-                            maxHealth = registeration.fakeMaxHealth;
-                        }
-                        else
-                        {
-                            health = boss.health;
-                            maxHealth = boss.bloonModel.maxHealth;
-                        }
 
-                        float hpScale = (float)health / maxHealth;
+
+
+                        float hpScale = (float)boss.health / boss.bloonModel.maxHealth;
                         hpScale = Math.Min(hpScale, 1);
                         hpScale = 1 - hpScale;
 
@@ -370,7 +351,7 @@ namespace BossHandlerNamespace
 
 
 
-                        textBox.Text.text = $"{health:n0}" + "/" + $"{maxHealth:n0}";
+                        textBox.Text.text = $"{boss.health:n0}" + "/" + $"{boss.bloonModel.maxHealth:n0}";
                         nameText.Show();
 
 

@@ -4,3 +4,7 @@ C:\Users\naoki\Desktop\repos2\BossManager\obj\Debug\BossHandler.csproj.AssemblyR
 C:\Users\naoki\Desktop\repos2\BossManager\obj\Debug\BossHandler.csproj.CoreCompileInputs.cache
 C:\Users\naoki\Desktop\repos2\BossManager\obj\Debug\BossHandler.dll
 C:\Users\naoki\Desktop\repos2\BossManager\obj\Debug\BossHandler.pdb
+C:\Users\naoki\Downloads\BossTemplate-bossTemplateV1.1\BossTemplate-bossTemplateV1.1\BossManager\obj\Debug\BossHandler.csproj.AssemblyReference.cache
+C:\Users\naoki\Downloads\BossTemplate-bossTemplateV1.1\BossTemplate-bossTemplateV1.1\BossManager\obj\Debug\BossHandler.csproj.CoreCompileInputs.cache
+C:\Users\naoki\Downloads\BossTemplate-bossTemplateV1.1\BossTemplate-bossTemplateV1.1\BossManager\obj\Debug\BossHandler.dll
+C:\Users\naoki\Downloads\BossTemplate-bossTemplateV1.1\BossTemplate-bossTemplateV1.1\BossManager\obj\Debug\BossHandler.pdb
