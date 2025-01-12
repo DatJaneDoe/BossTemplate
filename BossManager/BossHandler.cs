@@ -2,7 +2,7 @@
 using MelonLoader;
 
 
-using Harmony;
+
 
 using System.Linq;
 
@@ -82,7 +82,7 @@ using UnityEngine.Assertions;
 using Il2CppAssets.Scripts.Unity.Scenes;
 using Il2CppAssets.Scripts.Models.Towers.Filters;
 using Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors;
-
+using NinjaKiwi.Common.ResourceUtils;
 using BTD_Mod_Helper.Api.Components;
 using Il2CppAssets.Scripts.Unity.UI_New.Utils;
 using static MelonLoader.MelonLogger;
@@ -104,6 +104,14 @@ using System.Xml.Linq;
 using UnityEngine.Rendering;
 using Il2CppAssets.Scripts.Unity.UI_New;
 using Il2CppAssets.Scripts.Models.Towers.Mods;
+using Text = UnityEngine.UI.Text;
+using Il2CppAssets.Scripts.Unity.UI_New.Feats;
+using BTD_Mod_Helper.Api.Enums;
+using static BossHandlerNamespace.BossHandler.BossPanel;
+using UnityEngine.EventSystems;
+using Il2CppGeom;
+using CommandLine;
+using Il2CppSystem;
 
 namespace BossHandlerNamespace
 {
@@ -111,20 +119,24 @@ namespace BossHandlerNamespace
     public class BossHandler : BloonsTD6Mod
     {
 
-        public static ModHelperPanel panel;
-     
 
         public static readonly ModSettingInt HealthPercentMultiplier = 100;
         public static readonly ModSettingInt SpeedPercentMultiplier = 100;  
 
         public static Dictionary<string, BossRegisteration> bossRegisterations = new Dictionary<string, BossRegisteration>();
 
-        public static BossPanel bossPanel;
+        public static BossPanel bossPanelController;
         public static ModHelperPanel mainBossPanel;
 
         public const string PHAYZEBAR = "phayzeBar";
         public const string DREADBAR = "dreadHealth";
+        public const string charToReplace = "<>";
+        public static int lastCheckpoint = -1;
+        public static List<int> checkpointRounds = new List<int>();
 
+        // Makes the health UI update every 2 frames rather than every frame, good if UI is used extensively for reducing lag
+        public static bool reduceUIUpdates = false;
+        
         public class BossRegisteration
         {
             // Size of the description box
@@ -141,14 +153,28 @@ namespace BossHandlerNamespace
             public string id = "Boss";
             public string displayName = "NA";
             public string description = "";
-
+            
+            // if your boss uses extra info tabs, alter the tabs in these and the boss panel will reflect it
+            public List<ExtraInfoTab> extraInfo = new List<ExtraInfoTab>() { };
+           
 
             public bool isMainBoss = true;
 
-            // If the boss uses the extra info panel, it sets the icon and text according to InfoIcon and InfoText.
-            public bool usesExtraInfo = false;
-            public string extraInfoIcon = "";
-            public string extraInfoText = "";
+           
+            // If enabled, sets a checkpoint when the boss spawns. By default enabled for main bosses
+            public bool setCheckpoints = true;
+
+
+            // For best performance, keep the options below disabled if you arent using them.
+
+            // If enabled, adds skulls to the UI. The float values to put in skulls should be the same as the HealthPercentTriggerModel 
+            public bool usesSkulls = false;
+            public float[] skulls = new float[] { };
+
+            // If enabled, the boss will update the extra info tabs.
+            public bool usesExtraInfoTabs = false;
+
+            
             public BossRegisteration(BloonModel boss, string id, string displayName, bool isMainBoss = true, string icon = "defaultIcon", int continueRounds = 0, string description = "")
             {
                 this.icon = icon;
@@ -159,14 +185,15 @@ namespace BossHandlerNamespace
 
                 this.boss = boss;
                 this.isMainBoss = isMainBoss;
-              
+
                 // The inputted boss health is divided by 100, but then multiplied by 100 which is the default
                 // HP multiplier under mod settings. That way the user can adjust the health to their preference.
 
+                setCheckpoints = isMainBoss;
 
                 boss.id = boss.name = boss._name = id;
 
-               
+
                 Game.instance.model.bloonsByName[id] = boss;
                 Game.instance.model.bloons = Game.instance.model.bloons.Take(0).Append(boss).Concat(Game.instance.model.bloons.Skip(0)).ToArray();
 
@@ -174,8 +201,22 @@ namespace BossHandlerNamespace
                 bossRegisterations[boss.id] = this;
 
                 
-            }
+                    for(int i = 0; i < 8; i++)
+                    {
+                        extraInfo.Add(new ExtraInfoTab(VanillaSprites.YellowBtn, "b", "c", true));
+                    }
+                
 
+
+            }
+            public void ConfigureInfoTab(int index, string sprite, string text, string info, bool isVanillaSprite, bool active = true)
+            {
+                extraInfo[index].text = text;
+                extraInfo[index].toolTip = info;
+                extraInfo[index].sprite = sprite;
+                extraInfo[index].active = active;
+                extraInfo[index].isVanillaSprite = isVanillaSprite;
+            }
 
             public void SpawnOnRound(int round, bool clearOtherSpawns = true)
             {
@@ -200,6 +241,25 @@ namespace BossHandlerNamespace
                     }
                 }
             }
+            
+            public class ExtraInfoTab
+            {
+                public string sprite = "";
+                public string text = "";
+                public bool active = false;
+                public bool isVanillaSprite = true;
+                public string toolTip = "";
+                public ExtraInfoTab(string sprite, string text, string toolTip, bool isVanillaSprite) { 
+                
+                this.sprite = sprite;
+                    this.text = text;
+                    this.toolTip = toolTip;
+                    this.isVanillaSprite = isVanillaSprite;
+                }
+
+
+            }
+            
         }
 
         [RegisterTypeInIl2Cpp]
@@ -207,7 +267,7 @@ namespace BossHandlerNamespace
         {
             public BossPanel() : base() { }
             public ObjectId bloon;
-
+            public bool disabled = false;
 
             public ModHelperImage barImage;
             public ModHelperImage healthBlockBar;
@@ -216,7 +276,6 @@ namespace BossHandlerNamespace
      
             public ModHelperText description;
             public ModHelperImage descriptionBox;
-            public BossType bossType;
             public ModHelperImage bossIcon;
           
             public BossRegisteration registeration;
@@ -226,47 +285,49 @@ namespace BossHandlerNamespace
             public static string healthBarInUse = "healthBar";
 
             public ModHelperPanel extraPanel;
-         
-            public ModHelperImage iconGlow;
-            public ModHelperImage extraIcon;
-            
-            public ModHelperText extraTextObject;
-            public string extraText = "";
+
+            public List<UIinfoTab> extraInfoTabs = new List<UIinfoTab>();
+
             public ModHelperButton descriptionToggle;
 
+            public ModHelperPanel retryButton;
+
+            public List<UISkull> skullIcons = new List<UISkull>();
+            public List<Graphic> raycastDisable = new List<Graphic>();
             public void Start()
             {
 
-              // Adds various components for the boss UI
 
                 LayoutGroup group = InGame.instance.GetInGameUI().GetComponentInChildrenByName<LayoutGroup>("LayoutGroup");
 
 
                 mainBossPanel = group.gameObject.AddModHelperPanel(new BTD_Mod_Helper.Api.Components.Info("MainBoss", 2000, 300));
 
-               
-
 
                 barImage = mainBossPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("HealthBar", 0, 0, 1000, 100), "healthBar");
                 barImage.Image.sprite = ModContent.GetSprite<BossHandler>("healthBar");
+
+                raycastDisable.Add(barImage.Image);
+
                 healthBlockBar = mainBossPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("Bar", 0, 0, 1000, 100), "fillBar");
                 healthBlockBar.Image.sprite = ModContent.GetSprite<BossHandler>("fillBar");
+
+                raycastDisable.Add(healthBlockBar.Image);
 
                 textBox = mainBossPanel.AddText(new BTD_Mod_Helper.Api.Components.Info("TextBox", 0, 0, 2000, 200), "Text", 70);
 
                 nameText = mainBossPanel.AddText(new BTD_Mod_Helper.Api.Components.Info("NameBox", 0, 100, 2000, 200), registeration.displayName, 80);
 
-                extraPanel = mainBossPanel.gameObject.AddModHelperPanel(new BTD_Mod_Helper.Api.Components.Info("ExtraIconPanel", 0, -100, 700, 100), "");
-                extraPanel.Background.sprite = ModContent.GetSprite<BossHandler>("iconBG");
-                extraPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("Glow", -350, 0, 120), "iconBGglow").Image.sprite = ModContent.GetSprite<BossHandler>("iconBGglow");
+                
+                extraPanel = mainBossPanel.gameObject.AddModHelperPanel(new BTD_Mod_Helper.Api.Components.Info("ExtraIconPanel", 0, -120, 2000, 500), "blank");
+              
+               extraPanel.Background.raycastTarget = false;
+              
+                raycastDisable.Add(extraPanel.Background);
 
-                extraIcon = extraPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("ExtraIcon", -350, 0, 120), "descriptionButton");
 
-                extraTextObject = extraPanel.AddText(new BTD_Mod_Helper.Api.Components.Info("ExtraIconText", 0, 0, 1000, 100), "Nothing", 40);
-                extraTextObject.Text.alignment = Il2CppTMPro.TextAlignmentOptions.Center;
-
-                extraPanel.Hide();
-
+                extraPanel.Background.SetSprite(ModContent.GetSprite<BossHandler>("blank"));            
+              
 
                 bossIcon = mainBossPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("BossIcon", -550, 0, 150), "defaultIcon");
 
@@ -283,140 +344,398 @@ namespace BossHandlerNamespace
                         if (showDescription)
                         {
                             showDescription = false;
+                            extraPanel.Show();
                             descriptionBox.Hide();
                         }
                         else
                         {
                             showDescription = true;
-                            
+                            extraPanel.Hide();
                             descriptionBox.Show();
                             
                           
                         }
                     };
 
-               
+            
                     descriptionToggle = mainBossPanel.AddButton(new BTD_Mod_Helper.Api.Components.Info("ShowDescription", 550, 0, 100), "descriptionButton", descriptionToggleAction);
                     descriptionToggle.Image.sprite = ModContent.GetSprite<BossHandler>("descriptionButton");
-
+               
                     descriptionBox = mainBossPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("DescriptionBox", 0, 0, registeration.sizeX, registeration.sizeY), "descriptionBox");
                     descriptionBox.Image.sprite = ModContent.GetSprite<BossHandler>("descriptionBox");
 
                     description = descriptionBox.AddText(new BTD_Mod_Helper.Api.Components.Info("Description", 0, 0, registeration.sizeX, registeration.sizeY), registeration.description, 40, Il2CppTMPro.TextAlignmentOptions.Top);
+                extraPanel.Show();
+
+                descriptionBox.Hide();
 
 
+                for (int i = 0; i < 8; i++)
+                {
+                    skullIcons.Add(new UISkull());
 
 
-                    descriptionBox.Hide();
-               
+                    var uiTab = new UIinfoTab(extraPanel, i * 120);
+                    raycastDisable.Add(uiTab.icon.Image);
+                    raycastDisable.Add(uiTab.toolTipBg.Image);
+                    
+                    extraInfoTabs.Add(uiTab);
+                  
+                }
 
-                UpdateInfo();
+                // Disables raycast target for a lot of UI elements
+                foreach (var item in raycastDisable)
+                {
+                    item.raycastTarget = false;
+                }
+                mainBossPanel.Hide();
+
             }
 
             public void Update()
             {
-                if (InGame.instance.bridge != null)
+                if (!disabled)
                 {
-                    Bloon boss = InGame.instance.bridge.GetBloonFromId(bloon);
-
-                    // Checks if the boss exists and updates the UI accordingly. 
-
-                    if (boss != null)
+                    if (InGame.instance.bridge != null)
                     {
-                        // Uses the default boss health bar, but you can add custom ones by setting bossPanels healthBar property
-                        // to the name of the health bar image you'd like to use.
-                        // Image is only updated when the property is altered.
-                        if (healthBar != healthBarInUse)
+                        Bloon boss = InGame.instance.bridge.GetBloonFromId(bloon);
+
+                        if (boss != null)
                         {
-                            healthBarInUse = healthBar;
-                            barImage.Image.sprite = ModContent.GetSprite<BossHandler>(healthBarInUse);
-                        }
+                            // Updates various UI elements
 
-                        if (registeration.usesExtraInfo)
+                           
+                            if (!reduceUIUpdates || InGame.instance.bridge.ElapsedTime % 2 == 0)
+                            {
+
+
+
+                                UpdateHealthInfo(boss);
+                                UpdateTextInfo();
+
+
+                                UpdateSkullInfo(boss, registeration.usesSkulls);
+
+
+                                if (registeration.usesExtraInfoTabs)
+                                {
+                                    UpdateExtraEffectInfo();
+                                }
+
+                            }
+
+                            mainBossPanel.Show();
+                        }
+                        else
                         {
 
-                            extraTextObject.Text.SetText(extraText);
+                            // If the Bloon was destroyed, hides the UI
+
+                            mainBossPanel.Hide();
+
                         }
+                        try
+                        {
+                            if (InGame.instance.bridge.simulation.gameLost)
+                            {
+                         
+                                    
+                                var g = GameObject.Find("Canvas/DefeatPanel/Container/Buttons/ContinueButton/ContinueCost/");
 
 
+                                if (g != null && retryButton == null)
+                                {
+                                  retryButton =   g.AddModHelperPanel(new BTD_Mod_Helper.Api.Components.Info("n", 330), VanillaSprites.MergeBtn);
+                                    retryButton.AddText(new BTD_Mod_Helper.Api.Components.Info("t", 400), "Free", 80);
+                               
+                                }
+                                GameObject.Find("UI/Popups/CommonPopup(Clone)/AnimatedObject/Layout/Buttons/ConfirmButton/CashInfo/").Hide();
 
-                        float hpScale = (float)boss.health / boss.bloonModel.maxHealth;
-                        hpScale = Math.Min(hpScale, 1);
-                        hpScale = 1 - hpScale;
+                            }
+                        }
+                        catch
+                        {
 
-                        healthBlockBar.transform.localScale = new Vector3(1f, 0.6f, 1);
-                        healthBlockBar.transform.localScale = new Vector3(1f * hpScale, 1f, 1);
-
-                        healthBlockBar.transform.localPosition = new Vector3(500 + (-500 * hpScale), 0, 0);
-
-
-
-                        textBox.Text.text = $"{boss.health:n0}" + "/" + $"{boss.bloonModel.maxHealth:n0}";
-                        nameText.Show();
-
-
-
+                        }
                     }
-                    else
-                    {
-
-                        // If the Bloon was destroyed, hides the UI
-
-                        mainBossPanel.Hide();
-
-
-                    }
-                }
-                else
-                {
-                    mainBossPanel.Destroy();
+                   
                 }
                
             }
-
-            public void UpdateInfo()
+            public class UISkull
             {
-                // Updates text and icons for different bosses
-
-                InGame.instance.bridge.GetBloonFromId(bloon).spawnRound += registeration.continueRounds;
-
-                 nameText.SetText( registeration.displayName);
-                bossIcon.Image.sprite = ModContent.GetSprite<BossHandler>(registeration.icon);
-                mainBossPanel.Show();
-
-                showDescription = false;
-                descriptionBox.Hide();
-                if (registeration.usesExtraInfo)
+                public double fireTimer = 0;
+                public bool active = true;
+                public ModHelperImage icon;
+                public UISkull()
                 {
 
-                    extraIcon.Image.sprite = ModContent.GetSprite<BossHandler>(registeration.extraInfoIcon);
-                    extraTextObject.SetText(extraText);
-                  
-
-                    extraPanel.Show();
+                    icon = mainBossPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("skull", 0, 0, 60), VanillaSprites.SkullAndCrossbonesEmoteIcon);
+                    
                 }
-                else
+            }
+            public class UIinfoTab
+            {
+
+                public bool active = false;
+                public ModHelperImage icon;
+                public ModHelperText smallText;
+                public ModHelperText tooltip;
+                public ModHelperImage toolTipBg;
+                public int redTimer = 0;
+                public UIinfoTab(ModHelperPanel scrollPanel, int x)
                 {
-                    extraPanel.Hide();
+                  // Creates the components for each tab
+
+                    icon = scrollPanel.AddImage(new BTD_Mod_Helper.Api.Components.Info("UIInfoTabIcon", x - 420, 0, 110), VanillaSprites.YellowBtn);
+                 toolTipBg = icon.AddImage(new BTD_Mod_Helper.Api.Components.Info("UIInfoTabBG", 0,-350, 500), ModContent.GetSprite<BossHandler>("descriptionBox"));
+                    icon.Image.raycastTarget = toolTipBg.Image.raycastTarget = false;
+                    smallText = icon.AddText(new BTD_Mod_Helper.Api.Components.Info("UIInfoTabSmallText", 0, -90, 110), "90",50, TextAlignmentOptions.Top);
+                    
+                    tooltip = toolTipBg.AddText(new BTD_Mod_Helper.Api.Components.Info("UIInfoTabTooltip", 0, 0, 500), "Heres some text");
+                   
+                    toolTipBg.gameObject.transform.SetAsFirstSibling();
+                 
+
                 }
+                public void SetFormattedText( string iconText, string toolTip, bool reScale = false)
+                {
 
+                    // Sets the tooltip text
 
-
-
-
-                description.SetText("\n" + registeration.description);
-
-                descriptionBox.Image.rectTransform.sizeDelta = new UnityEngine.Vector2(registeration.sizeX, registeration.sizeY);
-                    description.Text.rectTransform.sizeDelta = new UnityEngine.Vector2(registeration.sizeX, registeration.sizeY);
-
-                    if (registeration.usesExtraInfo)
+                    smallText.Text.text = iconText;
+                    if (toolTip.Contains(charToReplace))
                     {
-                        descriptionBox.gameObject.transform.localPosition = new Vector3(0, (-registeration.sizeY / 2) - 200);
+                        toolTip = toolTip.Replace(charToReplace, iconText);
+                    }
+                    tooltip.Text.text = toolTip;
+
+
+                    if (reScale)
+                    {
+                        var c = tooltip.Text.GetPreferredValues();
+                        c.x = Math.Min(c.x, 1000);
+                        tooltip.parent.gameObject.transform.localPosition = new Vector3(0, (float)(c.y / -2f) - 150, 0);
+                        tooltip.Text.rectTransform.sizeDelta = new UnityEngine.Vector2(c.x, c.y);
+                        c.x += 30;
+                        c.y += 30;
+
+
+                        toolTipBg.RectTransform.sizeDelta = new UnityEngine.Vector2(c.x, c.y);
+                    }
+                }
+                public void Enable(bool enable)
+                {
+                    if(enable && !active)
+                    {
+                        icon.Show();
+                    }
+                    if (!enable && active)
+                    {
+                        icon.Hide();
+                    }
+                }
+            }
+            public void UpdateExtraEffectInfo()
+            {
+
+                // Sets text and icons for extra info tabs
+                var p = InGame.instance.inputManager.cursorPositionWorld;
+                p.y *= -1;
+                var pos = InGame.instance.GetUIFromWorld( p,false);
+                bool tooltip = false;
+               
+                for (int i = 0; i < 8; i++)
+                {
+                    UIinfoTab tab = extraInfoTabs[i];
+                    bool show = registeration.extraInfo[i].active;
+
+
+
+
+                    tab.smallText.Text.text = registeration.extraInfo[i].text;
+                    if (registeration.extraInfo[i].isVanillaSprite)
+                    {
+                        tab.icon.Image.SetSprite(new Il2CppNinjaKiwi.Common.ResourceUtils.SpriteReference(registeration.extraInfo[i].sprite));
                     }
                     else
                     {
-                        descriptionBox.gameObject.transform.localPosition = new Vector3(0, (-registeration.sizeY / 2) - 50);
+                        
+                        tab.icon.Image.SetSprite(ModContent.GetSprite<BossHandler>(registeration.extraInfo[i].sprite));
                     }
+                    if (show)
+                    {
+                        tab.icon.Show();
+
+                        if (tab.redTimer > 0)
+                        {
+                            
+                           
+                            if (reduceUIUpdates)
+                            {
+                                tab.redTimer -=2;
+                            }
+                            else
+                            {
+                                tab.redTimer--;
+                            }
+                            if (tab.redTimer <= 0)
+                            {
+                                tab.redTimer = 0;
+                                tab.smallText.Text.color = UnityEngine.Color.white;
+                                tab.smallText.Text.gameObject.transform.localPosition = new Vector3(0, -90, 0);
+                            }
+                            else
+                            {
+                                tab.smallText.Text.color = UnityEngine.Color.red;
+                                tab.smallText.Text.gameObject.transform.localPosition = new Vector3 (Math.Sin(InGame.instance.bridge.simulation.roundTime.elapsed/3) * 5, -90, 0);
+                            }
+                        }
+
+                    }
+                    else
+                    {
+                        tab.icon.Hide();
+                    }
+                    if (show && !tooltip)
+                    {
+                        var spot = tab.icon.gameObject.transform.position;
+                        var v = new UnityEngine.Vector2 (spot.x, spot.y);
+                        if (UnityEngine.Vector2.Distance(v, pos) < 16)
+                        {
+                            tooltip = true;
+                           
+                            
+                            
+                            tab.SetFormattedText(registeration.extraInfo[i].text, registeration.extraInfo[i].toolTip, tab.toolTipBg.gameObject.transform.localScale.x == 0);
+
+                            tab.toolTipBg.Show();
+
+                        }
+                        else
+                        {
+                            tab.toolTipBg.Hide();
+                        }
+                    }
+                    
+                }
+                
+            }
+            public void UpdateHealthInfo(Bloon boss)
+            {
+                InGame.instance.bridge.GetBloonFromId(bloon).spawnRound += registeration.continueRounds;
+                if (healthBar != healthBarInUse)
+                {
+                    healthBarInUse = healthBar;
+                    barImage.Image.sprite = ModContent.GetSprite<BossHandler>(healthBarInUse);
+                }
+
+                float hpScale = (float)boss.health / boss.bloonModel.maxHealth;
+                hpScale = Math.Min(hpScale, 1);
+                hpScale = 1 - hpScale;
+
+                healthBlockBar.transform.localScale = new Vector3(1f, 0.6f, 1);
+                healthBlockBar.transform.localScale = new Vector3(1f * hpScale, 1f, 1);
+
+                healthBlockBar.transform.localPosition = new Vector3(500 + (-500 * hpScale), 0, 0);
+
+
+
+                textBox.Text.text = $"{boss.health:n0}" + "/" + $"{boss.bloonModel.maxHealth:n0}";
+            }
+            public void ChangeExtraInfoText(int index, string text, bool redText = false)
+            {
+                // Changes the text of an extra info tab at the chosen index. If red text is enabled, makes the text red and shake briefly
+                registeration.extraInfo[index].text = text;
+                extraInfoTabs[index].active = true;
+                if (redText)
+                {
+                    extraInfoTabs[index].redTimer = 50;
+                }
+            }
+            public void UpdateSkullInfo(Bloon boss, bool enabled)
+            {
+
+                for (int i = 0; i < 8; i++)
+                {
+                    UISkull skull = skullIcons[i];
+                    if (enabled)
+                    {
+                        if (i < registeration.skulls.Count())
+                        {
+
+                            float increment = registeration.skulls[i] * 1000;
+                            skull.icon.gameObject.transform.localPosition = new Vector3(increment - 500, -50, 0);
+
+                            if (skull.fireTimer > 0)
+                            {
+                   
+
+                                if (reduceUIUpdates)
+                                {
+                                    skull.fireTimer -= 2;
+                                }
+                                else
+                                {
+                                    skull.fireTimer--;
+                                }
+
+                                if (skull.fireTimer <= 1)
+                                {
+                                    skull.fireTimer = 1;
+                                    skull.active = false;
+                                }
+                            }
+                            else
+                            {
+                                if (boss.health < boss.bloonModel.maxHealth * registeration.skulls[i])
+                                {
+                                    skull.fireTimer = 200;
+                                    skull.icon.Image.SetSprite(ModContent.GetSprite<BossHandler>("redSkullIcon"));
+                                }
+                                else
+                                {
+                                    skull.icon.Image.SetSprite(ModContent.GetSprite<BossHandler>("skullIcon"));
+                                }
+                            }
+                        }
+                        else
+                        {
+                            skull.active = false;
+
+                        }
+
+                        if (!skull.active)
+                        {
+                            skull.icon.gameObject.transform.localPosition = new Vector3(5000, 0, 0);
+                        }
+                    }
+                    else
+                    {
+                        skull.icon.gameObject.transform.localPosition = new Vector3(5000, 0, 0);
+                    }
+                }
+            }
+            public void UpdateTextInfo()
+            {
+
+                nameText.Show();
+
+
+             
+            
+                description.SetText("\n" + registeration.description);
+
+                descriptionBox.Image.rectTransform.sizeDelta = new UnityEngine.Vector2(registeration.sizeX, registeration.sizeY);
+                description.Text.rectTransform.sizeDelta = new UnityEngine.Vector2(registeration.sizeX, registeration.sizeY);
+
+
+
+                descriptionBox.gameObject.transform.localPosition = new Vector3(0, (-registeration.sizeY / 2) - 50);
+
+
+                nameText.SetText(registeration.displayName);
+                bossIcon.Image.sprite = ModContent.GetSprite<BossHandler>(registeration.icon);
 
                 // If there is no description, removes the toggle from view
 
@@ -428,6 +747,7 @@ namespace BossHandlerNamespace
                 {
                     descriptionToggle.gameObject.transform.localPosition = new Vector3(1000, 1000, 0);
                 }
+
             }
 
 
@@ -457,9 +777,11 @@ namespace BossHandlerNamespace
             return bossBase;
         }
 
+
         /// <summary>
         ///  Creates and attachs a Monobehavior to the InGame UI.
         /// </summary>
+        /// 
         public static T StartMonobehavior<T>() where T : MonoBehaviour
         {
 
@@ -468,10 +790,58 @@ namespace BossHandlerNamespace
             return obj as T;
 
         }
-            [HarmonyPatch(typeof(Bloon), nameof(Bloon.Initialise))]
+        [HarmonyLib.HarmonyPatch(typeof(InGame), nameof(InGame.StartMatch))]
+        public class MatchCheck
+        {
+            [HarmonyLib.HarmonyPostfix]
+            public static void Postfix()
+            {
+
+                lastCheckpoint = -1;
+                
+
+            }
+
+        }
+        
+
+        [HarmonyLib.HarmonyPatch(typeof(InGame), nameof(InGame.Lose))]
+        public class CheckpointSet
+        {
+            [HarmonyLib.HarmonyPostfix]
+            public static void Postfix(InGame __instance)
+            {
+                if (mainBossPanel != null)
+                {
+                    mainBossPanel.Hide();
+
+                }
+                if (lastCheckpoint != -1)
+                {
+
+                    __instance.SetRound(lastCheckpoint);
+                }
+
+            }
+
+        }
+        [HarmonyLib.HarmonyPatch(typeof(InGame), nameof(InGame.GetContinueCost))]
+        public class CheckpointSets
+        {
+            [HarmonyLib.HarmonyPostfix]
+            public static void Postfix(ref KonFuze __result)
+            {
+               
+               __result = new KonFuze(0);
+               
+            }
+
+        }
+
+        [HarmonyLib.HarmonyPatch(typeof(Bloon), nameof(Bloon.Initialise))]
         public class BloonSpawn
         {
-            [HarmonyPostfix]
+            [HarmonyLib.HarmonyPostfix]
             public static void Postfix(Bloon __instance)
             {
                
@@ -481,42 +851,46 @@ namespace BossHandlerNamespace
                 {
 
                     BossRegisteration registration = bossRegisterations[__instance.bloonModel.id];
-
+                    if (registration.setCheckpoints)
+                    {
+                        lastCheckpoint = InGame.instance.bridge.GetCurrentRound();
+                    }
 
                     // If the boss is a main boss, it will create the boss UI.
                     if (registration.isMainBoss)
                     {
-
-                        if (bossPanel == null)
+                        if (bossPanelController == null)
                         {
-                       
-                            /*
-                             If there is already a bossPanel, it wont create another one.
-                             You should not have multiple main bosses at once as the UIs would just block eachother
+                            bossPanelController = InGame.instance.GetInGameUI().AddComponent<BossPanel>();
 
-                            Any additional bosses or minions should have "isMainBoss" set to false. It wont occupy
-                            the UI panel but will still run BossInit
-
-                            */
-                            bossPanel = InGame.instance.GetInGameUI().AddComponent<BossPanel>();
-                            bossPanel.bloon = __instance.Id;
-                            bossPanel.registeration = registration;
                         }
                         else
                         {
-                            bossPanel.bloon = __instance.Id;
-                            bossPanel.registeration = registration;
-                            bossPanel.UpdateInfo();
+                            
+                            if (registration.skulls.Count() > 0)
+                            {
+                                foreach (var item in bossPanelController.skullIcons)
+                                {
+                                    item.active = true;
+                                    item.fireTimer = 0;
+
+                                }
+                            }
+
+                            
+                            
+
                         }
 
-                       
+                        bossPanelController.bloon = __instance.Id;
+                        bossPanelController.registeration = registration;
 
-                        
+
                     }
-                    
-                 
-                    
-                    
+
+
+
+
                     /*
                      Runs Boss Init and passes through the Bloon along with tis registration info, so the modder
                      can alter the boss further from there.
@@ -524,7 +898,7 @@ namespace BossHandlerNamespace
                      Non-main bosses will still run BossInit incase you want minions to run code when spawned.
 
                     */
-                    
+
 
 
                     BossInit(__instance, __instance.bloonModel, registration);

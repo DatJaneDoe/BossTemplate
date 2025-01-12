@@ -4,7 +4,7 @@ using Il2CppAssets.Scripts.Unity.Scenes;
 using Il2CppAssets.Scripts.Unity;
 
 using static BossHandlerNamespace.BossHandler;
-using Harmony;
+
 using BTD_Mod_Helper.Extensions;
 using MelonLoader;
 using UnityEngine;
@@ -16,6 +16,9 @@ using System.Runtime.InteropServices;
 using BTD_Mod_Helper.Api;
 using Il2CppAssets.Scripts.Unity.UI_New.InGame;
 using Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Abilities.Behaviors;
+using HarmonyLib;
+using BTD_Mod_Helper.Api.Enums;
+using Il2CppAssets.Scripts.Simulation.Towers;
 
 namespace BossHandlerNamespace
 {
@@ -38,9 +41,32 @@ namespace BossHandlerNamespace
             }
 
         }
+        [HarmonyPatch(typeof(Bloon), nameof(Bloon.Damage))]
+        public class TitleScreenInits
+        {
+            [HarmonyPrefix]
+
+            public static void Prefix(Tower tower, Bloon __instance, float totalAmount)
+            {
+                if(tower != null && bossPanelController != null && __instance.bloonModel.id.Contains("Blank"))
+                {
 
 
-        [HarmonyPatch(typeof(TitleScreen), nameof(TitleScreen.Start))]
+                    string damageTaken =  "" +((__instance.bloonModel.maxHealth - __instance.health) + (int)totalAmount)/1000;
+
+                    // This sets the text under the extra info tab icon. The tool tip replaces <> with this text
+                    // If you want to use other text than <>, you can change it at the top of BossHandler.cs as charToReplace
+
+                    bossPanelController.ChangeExtraInfoText(0, damageTaken, true);
+                   
+
+                   
+                }
+            }
+
+        }
+
+                [HarmonyPatch(typeof(TitleScreen), nameof(TitleScreen.Start))]
         public class TitleScreenInit
         {
             [HarmonyPostfix]
@@ -76,17 +102,34 @@ namespace BossHandlerNamespace
 
                 You can change the initial text anytime by changing bossPanel.extraText
                 */
-
+                
          
 
-                BossRegisteration blankBossRegistration = new BossRegisteration(blankBoss, "BlankBoss", "Blank", true, "defaultIcon");
-           
+                BossRegisteration blankBossRegistration = new BossRegisteration(blankBoss, "BlankBoss", "Blank", true, "defaultIcon", 9, "Does many thins \n\n Not really doesnt do much at all \n\n Excess text for testing purposes");
+
                 // Spawns the boss on round 40 and clears all other Bloon spawns from that round unless "clearOtherSpawns" is set to false
 
-                blankBossRegistration.SpawnOnRound(40);
+                blankBossRegistration.SpawnOnRound(1);
 
 
-             
+
+
+                // Assigns skulls to appear every 12.5% through the health bar and enables the boss bar to manage them. If skulls arent used, disable usesSkulls
+                blankBossRegistration.skulls = new float[] { 0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f };
+                blankBossRegistration.usesSkulls = true;
+
+
+
+                // Enables use of the extra info tabs.
+                blankBossRegistration.usesExtraInfoTabs = true;
+
+                // Sets the tooltip and icon for the tab at index 0.
+                blankBossRegistration.ConfigureInfoTab(0, VanillaSprites.TowerTypePrimary,"0", "boss has taken <> thousand damage so far", true);
+                // To see how to change the extra info tab text, see Bloon.Damage
+
+                // If you want to use an embedded png as the icon, put the name of the png in the sprite parameter and set isVanillaSprite to false
+                blankBossRegistration.ConfigureInfoTab(1, "defaultIcon", "", "This is definitely a boss Bloon", false);
+
             }
 
 
@@ -103,7 +146,6 @@ namespace BossHandlerNamespace
         [RegisterTypeInIl2Cpp]
         public class MonoBehaviorTemplate : MonoBehaviour
         {
-            public Bloon boss;
      
             public MonoBehaviorTemplate() : base()
             {
@@ -120,15 +162,7 @@ namespace BossHandlerNamespace
             {
              
 
-                if(boss != null)
-                {
-                    // If the boss is active, do stuff
-                }
-                else
-                {
-                    // If the bloon is destroyed, end this Monobehavior. 
-                    this.Destroy();
-                }
+             
             }
 
 
